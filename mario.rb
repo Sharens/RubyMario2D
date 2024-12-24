@@ -17,28 +17,49 @@ class Game
     @player = Player.new
     @platforms = []
     @game_over = false
+    @game_won = false
+    @goal = Goal.new(700, 200) # Cel do zdobycia
     
-    # Tworzenie podstawowego poziomu
+    # Tworzenie poziomu
     create_level
   end
 
   def create_level
-    # Podłoże
-    (0..7).each do |i|
+    # Podłoże z dziurami
+    create_ground_with_gaps
+    
+    # Platformy i przeszkody
+    create_platforms
+  end
+
+  def create_ground_with_gaps
+    # Pierwsza część podłoża
+    (0..3).each do |i|
       @platforms << Platform.new(i * 100, 500, 100, 20)
     end
     
-    # Przeszkody i dziury
+    # Dziura
+    
+    # Druga część podłoża
+    (5..7).each do |i|
+      @platforms << Platform.new(i * 100, 500, 100, 20)
+    end
+  end
+
+  def create_platforms
+    # Platformy prowadzące do celu
     @platforms << Platform.new(300, 400, 100, 20)
     @platforms << Platform.new(500, 300, 100, 20)
+    @platforms << Platform.new(700, 250, 100, 20) # Platforma pod celem
   end
 
   def update
-    return if @game_over
+    return if @game_over || @game_won
     
     @player.update(KEYS)
     check_collisions
     check_death
+    check_win
   end
 
   def check_collisions
@@ -54,8 +75,47 @@ class Game
   def check_death
     if @player.y > Window.height
       @game_over = true
-      Text.new("Game Over!", x: 350, y: 250, size: 20)
+      show_message("Game Over!", 'red')
     end
+  end
+
+  def check_win
+    if @player.collides_with?(@goal)
+      @game_won = true
+      @goal.collect
+      show_message("Level Complete!", 'green')
+    end
+  end
+
+  def show_message(text, color)
+    Text.new(
+      text,
+      x: 350, y: 250,
+      size: 20,
+      color: color
+    )
+  end
+end
+
+class Goal
+  attr_reader :x, :y, :width, :height
+
+  def initialize(x, y)
+    @x = x
+    @y = y
+    @width = 30
+    @height = 30
+    @collected = false
+    
+    @sprite = Square.new(
+      x: x, y: y,
+      size: 30,
+      color: 'yellow'
+    )
+  end
+
+  def collect
+    @sprite.remove
   end
 end
 
@@ -96,18 +156,17 @@ class Player
   end
 
   def apply_physics
-    # Grawitacja
     @velocity_y += 0.8 unless @grounded
     
     @x += @velocity_x
     @y += @velocity_y
   end
 
-  def collides_with?(platform)
-    @x < platform.x + platform.width &&
-    @x + @width > platform.x &&
-    @y < platform.y + platform.height &&
-    @y + @height > platform.y
+  def collides_with?(object)
+    @x < object.x + object.width &&
+    @x + @width > object.x &&
+    @y < object.y + object.height &&
+    @y + @height > object.y
   end
 
   def handle_collision(platform)
