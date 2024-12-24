@@ -1,9 +1,15 @@
 require 'ruby2d'
+require 'json'
+
+# Upewnij się, że katalog levels istnieje
+Dir.mkdir('levels') unless Dir.exist?('levels')
 
 set title: "Super Mario Ruby", width: 800, height: 600
 
+# Inicjalizacja globalnej tablicy klawiszy
 KEYS = {}
 
+# Obsługa klawiszy
 on :key_down do |event|
   KEYS[event.key] = true
 end
@@ -12,27 +18,166 @@ on :key_up do |event|
   KEYS[event.key] = false
 end
 
+class Menu
+  def initialize(game)
+    @game = game
+    @current_option = 0
+    @options = ['Start Game', 'Load Level', 'Exit']
+    @can_move = true
+    create_menu_items
+  end
+
+  def create_menu_items
+    @title = Text.new(
+      'Super Mario Ruby',
+      x: 300, y: 100,
+      size: 30,
+      color: 'white'
+    )
+
+    @menu_items = @options.map.with_index do |option, index|
+      Text.new(
+        option,
+        x: 350,
+        y: 250 + (index * 50),
+        size: 20,
+        color: index == @current_option ? 'yellow' : 'white'
+      )
+    end
+  end
+
+  def update
+    if KEYS['up'] && @can_move
+      move_cursor_up
+      @can_move = false
+    elsif KEYS['down'] && @can_move
+      move_cursor_down
+      @can_move = false
+    elsif KEYS['return'] && @can_move
+      select_option
+      @can_move = false
+    elsif !KEYS['up'] && !KEYS['down'] && !KEYS['return']
+      @can_move = true
+    end
+  end
+
+  def move_cursor_up
+    @menu_items[@current_option].color = 'white'
+    @current_option = (@current_option - 1) % @options.length
+    @menu_items[@current_option].color = 'yellow'
+  end
+
+  def move_cursor_down
+    @menu_items[@current_option].color = 'white'
+    @current_option = (@current_option + 1) % @options.length
+    @menu_items[@current_option].color = 'yellow'
+  end
+
+  def select_option
+    case @current_option
+    when 0 # Start Game
+      hide_menu
+      @game.start_game
+    when 1 # Load Level
+      hide_menu
+      @game.load_custom_level
+    when 2 # Exit
+      Window.close
+    end
+  end
+
+  def hide_menu
+    @title.remove
+    @menu_items.each(&:remove)
+  end
+
+  def show_menu
+    create_menu_items
+  end
+end
+
 class Game
   def initialize
     @gui_elements = []
+    @current_level = 1
+    @state = :menu
+    @menu = Menu.new(self)
+  end
+
+  def start_game
+    @state = :playing
     reset_game
   end
 
-  def reset_game
-    # Usuń stare elementy
+  def load_custom_level
+    @state = :level_select
+    show_level_input
+  end
+
+  def show_level_input
     @gui_elements.each(&:remove)
     @gui_elements.clear
+    
+    @level_prompt = Text.new(
+      "Enter level number (1-9) and press Enter:",
+      x: 250, y: 250,
+      size: 20,
+      color: 'white'
+    )
+    @gui_elements << @level_prompt
+  end
+
+  def update
+    case @state
+    when :menu
+      @menu.update
+    when :level_select
+      handle_level_selection
+    when :playing
+      if @game_over || @game_won
+        if KEYS['p']
+          clean_up_game
+          @state = :menu
+          @menu.show_menu
+        else
+          reset_game if KEYS['r']
+        end
+        return
+      end
+      
+      @player.update(KEYS)
+      @enemies.each(&:update)
+      check_collisions
+      check_coin_collection
+      check_enemy_collisions
+      check_death
+      check_win
+    end
+  end
+
+  def clean_up_game
+    # Usuń wszystkie elementy GUI
+    @gui_elements.each(&:remove)
+    @gui_elements.clear
+    
+    # Usuń wszystkie elementy gry
     @player&.remove_sprite
     @goal&.remove_sprite
     @coins&.each(&:remove_sprite)
     @platforms&.each(&:remove_sprite)
     @enemies&.each(&:remove_sprite)
     
+    # Wyczyść kolekcje
+    @coins = []
+    @platforms = []
+    @enemies = []
+  end
+
+  def reset_game
+    clean_up_game
+    
     # Utwórz nowe elementy
     @player = Player.new
-    @platforms = []
-    @coins = []
-    @enemies = []
     @score = 0
     @lives = 3
     @score_text = Text.new(
@@ -51,9 +196,87 @@ class Game
     @gui_elements << @lives_text
     @game_over = false
     @game_won = false
-    @goal = Goal.new(700, 200)
     
-    create_level
+    load_level(@current_level)
+  end
+
+  def handle_level_selection
+    ('1'..'9').each do |num|
+      if KEYS[num]
+        @current_level = num.to_i
+        @state = :playing
+        reset_game
+        break
+      end
+    end
+    
+    if KEYS['escape']
+      @state = :menu
+      @gui_elements.each(&:remove)
+      @gui_elements.clear
+      @menu.show_menu
+    end
+  end
+
+  def show_message(text)
+    @gui_elements << Text.new(
+      text,
+      x: 350, y: 250,
+      size: 20,
+      color: 'white'
+    )
+    if @game_over || @game_won
+      @gui_elements << Text.new(
+        "Final Score: #{@score}",
+        x: 350, y: 280,
+        size: 20,
+        color: 'white'
+      )
+      @gui_elements << Text.new(
+        "Press 'R' to retry or 'P' for menu",
+        x: 350, y: 310,
+        size: 20,
+        color: 'white'
+      )
+    end
+  end
+
+  def load_level(level_number)
+    level_file = File.read("levels/level#{level_number}.txt")
+    level_data = JSON.parse(level_file)
+    
+    # Wczytaj pozycję gracza
+    @player.x = level_data['player']['x']
+    @player.y = level_data['player']['y']
+    
+    # Wczytaj cel
+    goal_data = level_data['goal']
+    @goal = Goal.new(goal_data['x'], goal_data['y'])
+    
+    # Wczytaj platformy
+    level_data['platforms'].each do |platform|
+      @platforms << Platform.new(
+        platform['x'],
+        platform['y'],
+        platform['width'],
+        platform['height']
+      )
+    end
+    
+    # Wczytaj monety
+    level_data['coins'].each do |coin|
+      add_coin(coin['x'], coin['y'])
+    end
+    
+    # Wczytaj przeciwników
+    level_data['enemies'].each do |enemy|
+      add_enemy(
+        enemy['x1'],
+        enemy['y1'],
+        enemy['x2'],
+        enemy['y2']
+      )
+    end
   end
 
   def create_level
@@ -106,21 +329,6 @@ class Game
 
   def add_coin(x, y)
     @coins << Coin.new(x, y)
-  end
-
-  def update
-    if @game_over || @game_won
-      reset_game if KEYS['p']
-      return
-    end
-    
-    @player.update(KEYS)
-    @enemies.each(&:update)
-    check_collisions
-    check_coin_collection
-    check_enemy_collisions
-    check_death
-    check_win
   end
 
   def check_collisions
@@ -191,29 +399,6 @@ class Game
       @game_won = true
       @goal.collect
       show_message("Level Complete!")
-    end
-  end
-
-  def show_message(text)
-    @gui_elements << Text.new(
-      text,
-      x: 350, y: 250,
-      size: 20,
-      color: 'white'
-    )
-    if @game_over || @game_won
-      @gui_elements << Text.new(
-        "Final Score: #{@score}",
-        x: 350, y: 280,
-        size: 20,
-        color: 'white'
-      )
-      @gui_elements << Text.new(
-        "Press 'P' to play again",
-        x: 350, y: 310,
-        size: 20,
-        color: 'white'
-      )
     end
   end
 end
