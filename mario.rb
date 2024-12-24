@@ -14,22 +14,42 @@ end
 
 class Game
   def initialize
+    @gui_elements = []
+    reset_game
+  end
+
+  def reset_game
+    # Usuń stare elementy
+    @gui_elements.each(&:remove)
+    @gui_elements.clear
+    @player&.remove_sprite
+    @goal&.remove_sprite
+    @coins&.each(&:remove_sprite)
+    @platforms&.each(&:remove_sprite)
+    
+    # Utwórz nowe elementy
     @player = Player.new
     @platforms = []
+    @coins = []
+    @score = 0
+    @score_text = Text.new(
+      "Score: 0",
+      x: 10, y: 10,
+      size: 20,
+      color: 'white'
+    )
+    @gui_elements << @score_text
     @game_over = false
     @game_won = false
-    @goal = Goal.new(700, 200) # Cel do zdobycia
+    @goal = Goal.new(700, 200)
     
-    # Tworzenie poziomu
     create_level
   end
 
   def create_level
-    # Podłoże z dziurami
     create_ground_with_gaps
-    
-    # Platformy i przeszkody
     create_platforms
+    create_coins
   end
 
   def create_ground_with_gaps
@@ -53,11 +73,28 @@ class Game
     @platforms << Platform.new(700, 250, 100, 20) # Platforma pod celem
   end
 
+  def create_coins
+    # Monety na drodze
+    add_coin(250, 450)  # Nad pierwszą częścią podłoża
+    add_coin(450, 450)  # Nad dziurą
+    add_coin(300, 350)  # Nad pierwszą platformą
+    add_coin(500, 250)  # Nad drugą platformą
+    add_coin(700, 150)  # Nad celem
+  end
+
+  def add_coin(x, y)
+    @coins << Coin.new(x, y)
+  end
+
   def update
-    return if @game_over || @game_won
+    if @game_over || @game_won
+      reset_game if KEYS['p']
+      return
+    end
     
     @player.update(KEYS)
     check_collisions
+    check_coin_collection
     check_death
     check_win
   end
@@ -72,10 +109,24 @@ class Game
     end
   end
 
+  def check_coin_collection
+    @coins.each do |coin|
+      if !coin.collected && @player.collides_with?(coin)
+        collect_coin(coin)
+      end
+    end
+  end
+
+  def collect_coin(coin)
+    coin.collect
+    @score += 10
+    @score_text.text = "Score: #{@score}"
+  end
+
   def check_death
     if @player.y > Window.height
       @game_over = true
-      show_message("Game Over!", 'red')
+      show_message("Game Over!")
     end
   end
 
@@ -83,17 +134,31 @@ class Game
     if @player.collides_with?(@goal)
       @game_won = true
       @goal.collect
-      show_message("Level Complete!", 'green')
+      show_message("Level Complete!")
     end
   end
 
-  def show_message(text, color)
-    Text.new(
+  def show_message(text)
+    @gui_elements << Text.new(
       text,
       x: 350, y: 250,
       size: 20,
-      color: color
+      color: 'white'
     )
+    if @game_over || @game_won
+      @gui_elements << Text.new(
+        "Final Score: #{@score}",
+        x: 350, y: 280,
+        size: 20,
+        color: 'white'
+      )
+      @gui_elements << Text.new(
+        "Press 'P' to play again",
+        x: 350, y: 310,
+        size: 20,
+        color: 'white'
+      )
+    end
   end
 end
 
@@ -103,19 +168,23 @@ class Goal
   def initialize(x, y)
     @x = x
     @y = y
-    @width = 30
+    @width = 40
     @height = 30
     @collected = false
     
-    @sprite = Square.new(
+    @sprite = Rectangle.new(
       x: x, y: y,
-      size: 30,
-      color: 'yellow'
+      width: @width, height: @height,
+      color: 'fuchsia'
     )
   end
 
   def collect
     @sprite.remove
+  end
+
+  def remove_sprite
+    @sprite&.remove
   end
 end
 
@@ -131,18 +200,27 @@ class Player
     @velocity_y = 0
     @grounded = false
     
-    @sprite = Square.new(
-      x: @x, y: @y,
-      size: @width,
-      color: 'red'
+    @sprite = Triangle.new(
+      x1: @x, y1: @y + @height,           # lewy dolny róg
+      x2: @x + @width, y2: @y + @height,  # prawy dolny róg
+      x3: @x + (@width/2), y3: @y,        # środek góry
+      color: 'blue'
     )
   end
 
   def update(keys)
     handle_input(keys)
     apply_physics
-    @sprite.x = @x
-    @sprite.y = @y
+    update_sprite_position
+  end
+
+  def update_sprite_position
+    @sprite.x1 = @x
+    @sprite.y1 = @y + @height
+    @sprite.x2 = @x + @width
+    @sprite.y2 = @y + @height
+    @sprite.x3 = @x + (@width/2)
+    @sprite.y3 = @y
   end
 
   def handle_input(keys)
@@ -176,6 +254,10 @@ class Player
       @grounded = true
     end
   end
+
+  def remove_sprite
+    @sprite&.remove
+  end
 end
 
 class Platform
@@ -192,6 +274,38 @@ class Platform
       width: width, height: height,
       color: 'green'
     )
+  end
+
+  def remove_sprite
+    @sprite&.remove
+  end
+end
+
+class Coin
+  attr_reader :x, :y, :width, :height
+  attr_accessor :collected
+
+  def initialize(x, y)
+    @x = x
+    @y = y
+    @width = 15
+    @height = 15
+    @collected = false
+    
+    @sprite = Square.new(
+      x: x, y: y,
+      size: @width,
+      color: 'yellow'
+    )
+  end
+
+  def collect
+    @collected = true
+    @sprite.remove
+  end
+
+  def remove_sprite
+    @sprite&.remove
   end
 end
 
