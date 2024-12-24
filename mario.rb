@@ -1,8 +1,8 @@
 require 'ruby2d'
 require 'json'
 
-# Upewnij się, że katalog levels istnieje
-Dir.mkdir('levels') unless Dir.exist?('levels')
+# Użyj zmiennej globalnej zamiast stałej
+$mouse_handler = nil
 
 set title: "Super Mario Ruby", width: 800, height: 600
 
@@ -18,11 +18,24 @@ on :key_up do |event|
   KEYS[event.key] = false
 end
 
+# Upewnij się, że katalog levels istnieje
+Dir.mkdir('levels') unless Dir.exist?('levels')
+
+on :mouse_down do |event|
+  if $mouse_handler
+    if event.button == :left
+      $mouse_handler.call(event.x, event.y, :add)
+    elsif event.button == :right
+      $mouse_handler.call(event.x, event.y, :remove)
+    end
+  end
+end
+
 class Menu
   def initialize(game)
     @game = game
     @current_option = 0
-    @options = ['Start Game', 'Load Level', 'Exit']
+    @options = ['Start Game', 'Load Level', 'Create Level', 'Exit']
     @can_move = true
     create_menu_items
   end
@@ -81,7 +94,10 @@ class Menu
     when 1 # Load Level
       hide_menu
       @game.load_custom_level
-    when 2 # Exit
+    when 2 # Create Level
+      hide_menu
+      @game.start_level_generator
+    when 3 # Exit
       Window.close
     end
   end
@@ -96,12 +112,328 @@ class Menu
   end
 end
 
+class LevelGenerator
+  def initialize(game)
+    @game = game
+    @current_tool = :platform
+    @elements = {
+      platforms: [],
+      coins: [],
+      enemies: [],
+      player: nil,
+      goal: nil
+    }
+    @gui_elements = []
+    @mouse_pressed = false
+    show_interface
+  end
+
+  def show_interface
+    @gui_elements << Text.new(
+      "Level Generator - Controls:",
+      x: 10, y: 10,
+      size: 20,
+      color: 'white'
+    )
+    @gui_elements << Text.new(
+      "1: Platform | 2: Coin | 3: Enemy | 4: Player | 5: Goal",
+      x: 10, y: 40,
+      size: 16,
+      color: 'white'
+    )
+    @gui_elements << Text.new(
+      "Left Click: Place | Right Click: Remove | S: Save | ESC: Menu",
+      x: 10, y: 70,
+      size: 16,
+      color: 'white'
+    )
+    @current_tool_text = Text.new(
+      "Current Tool: Platform",
+      x: 10, y: 100,
+      size: 16,
+      color: 'yellow'
+    )
+    @gui_elements << @current_tool_text
+  end
+
+  def handle_mouse_click(x, y, action)
+    if action == :add
+      case @current_tool
+      when :platform
+        add_platform(x, y)
+      when :coin
+        add_coin(x, y)
+      when :enemy
+        add_enemy(x, y)
+      when :player
+        set_player(x, y)
+      when :goal
+        set_goal(x, y)
+      end
+    elsif action == :remove
+      remove_element_at(x, y)
+    end
+  end
+
+  def add_platform(x, y)
+    platform = {
+      x: (x - 50).round(-1), # Centruj względem kursora
+      y: y.round(-1),
+      width: 100,
+      height: 20,
+      sprite: Rectangle.new(
+        x: (x - 50).round(-1),
+        y: y.round(-1),
+        width: 100,
+        height: 20,
+        color: 'green'
+      )
+    }
+    @elements[:platforms] << platform
+  end
+
+  def add_coin(x, y)
+    coin = {
+      x: (x - 7).round(-1), # Centruj względem kursora
+      y: (y - 7).round(-1),
+      sprite: Square.new(
+        x: (x - 7).round(-1),
+        y: (y - 7).round(-1),
+        size: 15,
+        color: 'yellow'
+      )
+    }
+    @elements[:coins] << coin
+  end
+
+  def add_enemy(x, y)
+    enemy = {
+      x1: x.round(-1),
+      y1: y.round(-1),
+      x2: (x + 100).round(-1),
+      y2: y.round(-1),
+      sprite: Rectangle.new(
+        x: x.round(-1),
+        y: y.round(-1),
+        width: 30,
+        height: 30,
+        color: 'red'
+      )
+    }
+    @elements[:enemies] << enemy
+  end
+
+  def set_player(x, y)
+    @elements[:player]&.sprite&.remove
+    @elements[:player] = {
+      x: x.round(-1),
+      y: y.round(-1),
+      sprite: Triangle.new(
+        x1: x.round(-1), y1: y.round(-1) + 30,
+        x2: x.round(-1) + 30, y2: y.round(-1) + 30,
+        x3: x.round(-1) + 15, y3: y.round(-1),
+        color: 'blue'
+      )
+    }
+  end
+
+  def set_goal(x, y)
+    @elements[:goal]&.sprite&.remove
+    @elements[:goal] = {
+      x: x.round(-1),
+      y: y.round(-1),
+      sprite: Rectangle.new(
+        x: x.round(-1),
+        y: y.round(-1),
+        width: 40,
+        height: 30,
+        color: 'fuchsia'
+      )
+    }
+  end
+
+  def update
+    handle_tool_selection
+    handle_save
+    handle_exit
+  end
+
+  def handle_tool_selection
+    if KEYS['1']
+      @current_tool = :platform
+      @current_tool_text.text = "Current Tool: Platform"
+    elsif KEYS['2']
+      @current_tool = :coin
+      @current_tool_text.text = "Current Tool: Coin"
+    elsif KEYS['3']
+      @current_tool = :enemy
+      @current_tool_text.text = "Current Tool: Enemy"
+    elsif KEYS['4']
+      @current_tool = :player
+      @current_tool_text.text = "Current Tool: Player"
+    elsif KEYS['5']
+      @current_tool = :goal
+      @current_tool_text.text = "Current Tool: Goal"
+    end
+  end
+
+  def handle_save
+    if KEYS['s']
+      save_level
+      clean_up
+      @game.state = :menu
+      @game.menu.show_menu
+    end
+  end
+
+  def handle_exit
+    if KEYS['escape']
+      clean_up
+      @game.state = :menu
+      @game.menu.show_menu
+    end
+  end
+
+  def save_level
+    return unless @elements[:player] && @elements[:goal]
+
+    level_data = {
+      player: {
+        x: @elements[:player][:x],
+        y: @elements[:player][:y]
+      },
+      goal: {
+        x: @elements[:goal][:x],
+        y: @elements[:goal][:y]
+      },
+      platforms: @elements[:platforms].map { |p|
+        {
+          x: p[:x],
+          y: p[:y],
+          width: p[:width],
+          height: p[:height]
+        }
+      },
+      coins: @elements[:coins].map { |c|
+        {
+          x: c[:x],
+          y: c[:y]
+        }
+      },
+      enemies: @elements[:enemies].map { |e|
+        {
+          x1: e[:x1],
+          y1: e[:y1],
+          x2: e[:x2],
+          y2: e[:y2]
+        }
+      }
+    }
+
+    # Znajdź następny dostępny numer poziomu
+    level_num = 1
+    while File.exist?("levels/level#{level_num}.txt")
+      level_num += 1
+    end
+
+    File.write("levels/level#{level_num}.txt", JSON.pretty_generate(level_data))
+  end
+
+  def clean_up
+    @gui_elements.each(&:remove)
+    @elements.values.flatten.compact.each { |e| e[:sprite]&.remove }
+    # Wyczyść handler myszy
+    $mouse_handler = nil
+  end
+
+  def remove_element_at(x, y)
+    # Sprawdź każdy typ elementu
+    @elements[:platforms].each_with_index do |platform, index|
+      if point_in_rect?(x, y, platform)
+        platform[:sprite].remove
+        @elements[:platforms].delete_at(index)
+        return
+      end
+    end
+
+    @elements[:coins].each_with_index do |coin, index|
+      if point_in_rect?(x, y, coin)
+        coin[:sprite].remove
+        @elements[:coins].delete_at(index)
+        return
+      end
+    end
+
+    @elements[:enemies].each_with_index do |enemy, index|
+      if point_in_rect?(x, y, enemy)
+        enemy[:sprite].remove
+        @elements[:enemies].delete_at(index)
+        return
+      end
+    end
+
+    if @elements[:player] && point_in_rect?(x, y, @elements[:player])
+      @elements[:player][:sprite].remove
+      @elements[:player] = nil
+      return
+    end
+
+    if @elements[:goal] && point_in_rect?(x, y, @elements[:goal])
+      @elements[:goal][:sprite].remove
+      @elements[:goal] = nil
+      return
+    end
+  end
+
+  def point_in_rect?(x, y, element)
+    if element[:x1] # Dla przeciwników
+      ex = element[:x1]
+      ey = element[:y1]
+      ew = 30 # szerokość przeciwnika
+      eh = 30 # wysokość przeciwnika
+    elsif element[:width] # Dla platform
+      ex = element[:x]
+      ey = element[:y]
+      ew = element[:width]
+      eh = element[:height]
+    else # Dla monet, gracza i celu
+      ex = element[:x]
+      ey = element[:y]
+      ew = 15 # domyślna szerokość
+      eh = 15 # domyślna wysokość
+      
+      # Specjalne wymiary dla gracza i celu
+      if element == @elements[:player]
+        ew = 30
+        eh = 30
+      elsif element == @elements[:goal]
+        ew = 40
+        eh = 30
+      end
+    end
+
+    x >= ex && x <= ex + ew && y >= ey && y <= ey + eh
+  end
+end
+
 class Game
+  attr_accessor :state, :menu
+
   def initialize
     @gui_elements = []
     @current_level = 1
     @state = :menu
     @menu = Menu.new(self)
+    @can_move = true
+    @level_items = []
+    @available_levels = []
+    @coins = []
+    @platforms = []
+    @enemies = []
+    @game_over = false
+    @game_won = false
+    @player = nil
+    @goal = nil
   end
 
   def start_game
@@ -110,21 +442,116 @@ class Game
   end
 
   def load_custom_level
+    clean_up_game
     @state = :level_select
-    show_level_input
+    show_level_select_menu
   end
 
-  def show_level_input
-    @gui_elements.each(&:remove)
-    @gui_elements.clear
+  def show_level_select_menu
+    # Upewnij się, że katalog levels istnieje
+    Dir.mkdir('levels') unless Dir.exist?('levels')
     
-    @level_prompt = Text.new(
-      "Enter level number (1-9) and press Enter:",
-      x: 250, y: 250,
+    # Znajdź wszystkie dostępne poziomy
+    @available_levels = Dir.glob("levels/level*.txt").sort_by { |f| 
+      f.match(/level(\d+)\.txt/)[1].to_i 
+    }
+    
+    return show_no_levels_message if @available_levels.empty?
+    
+    @current_level_index = 0
+    
+    # Pokaż tytuł
+    @gui_elements << Text.new(
+      "Select Level:",
+      x: 350, y: 150,
+      size: 25,
+      color: 'white'
+    )
+    
+    # Stwórz listę poziomów
+    @level_items = @available_levels.map.with_index do |level_file, index|
+      level_num = level_file.match(/level(\d+)\.txt/)[1]
+      Text.new(
+        "Level #{level_num}",
+        x: 350,
+        y: 200 + (index * 30),
+        size: 20,
+        color: index == @current_level_index ? 'yellow' : 'white'
+      )
+    end
+    @gui_elements.concat(@level_items)
+    
+    # Dodaj instrukcje
+    @gui_elements << Text.new(
+      "Use arrows to select, Enter to confirm, Esc to return",
+      x: 250, y: 500,
+      size: 15,
+      color: 'white'
+    )
+  end
+
+  def show_no_levels_message
+    @gui_elements << Text.new(
+      "No custom levels found!",
+      x: 350, y: 250,
       size: 20,
       color: 'white'
     )
-    @gui_elements << @level_prompt
+    @gui_elements << Text.new(
+      "Press Esc to return to menu",
+      x: 350, y: 280,
+      size: 15,
+      color: 'white'
+    )
+  end
+
+  def handle_level_selection
+    return if @available_levels.empty?
+
+    if KEYS['up'] && @can_move
+      move_level_cursor_up
+      @can_move = false
+    elsif KEYS['down'] && @can_move
+      move_level_cursor_down
+      @can_move = false
+    elsif KEYS['return'] && @can_move
+      select_level
+      @can_move = false
+    elsif KEYS['escape'] && @can_move
+      return_to_menu
+      @can_move = false
+    elsif !KEYS['up'] && !KEYS['down'] && !KEYS['return'] && !KEYS['escape']
+      @can_move = true
+    end
+  end
+
+  def move_level_cursor_up
+    @level_items[@current_level_index].color = 'white'
+    @current_level_index = (@current_level_index - 1) % @available_levels.length
+    @level_items[@current_level_index].color = 'yellow'
+  end
+
+  def move_level_cursor_down
+    @level_items[@current_level_index].color = 'white'
+    @current_level_index = (@current_level_index + 1) % @available_levels.length
+    @level_items[@current_level_index].color = 'yellow'
+  end
+
+  def select_level
+    return if @current_level_index.nil? || @available_levels.empty?
+    
+    level_file = @available_levels[@current_level_index]
+    @current_level = level_file.match(/level(\d+)\.txt/)[1].to_i
+    clean_up_game
+    @state = :playing
+    reset_game
+  end
+
+  def return_to_menu
+    @state = :menu
+    @gui_elements.each(&:remove)
+    @gui_elements.clear
+    @menu.show_menu
   end
 
   def update
@@ -133,6 +560,8 @@ class Game
       @menu.update
     when :level_select
       handle_level_selection
+    when :generator
+      @generator.update
     when :playing
       if @game_over || @game_won
         if KEYS['p']
@@ -171,6 +600,8 @@ class Game
     @coins = []
     @platforms = []
     @enemies = []
+    @level_items = []
+    $mouse_handler = nil
   end
 
   def reset_game
@@ -198,24 +629,6 @@ class Game
     @game_won = false
     
     load_level(@current_level)
-  end
-
-  def handle_level_selection
-    ('1'..'9').each do |num|
-      if KEYS[num]
-        @current_level = num.to_i
-        @state = :playing
-        reset_game
-        break
-      end
-    end
-    
-    if KEYS['escape']
-      @state = :menu
-      @gui_elements.each(&:remove)
-      @gui_elements.clear
-      @menu.show_menu
-    end
   end
 
   def show_message(text)
@@ -400,6 +813,13 @@ class Game
       @goal.collect
       show_message("Level Complete!")
     end
+  end
+
+  def start_level_generator
+    @state = :generator
+    @generator = LevelGenerator.new(self)
+    # Zaktualizuj handler myszy aby obsługiwał akcję
+    $mouse_handler = ->(x, y, action) { @generator.handle_mouse_click(x, y, action) if @state == :generator }
   end
 end
 
